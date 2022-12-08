@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width">
+  <title>Rename images sequentially given missing numbers (online tool)</title>
+</head>
+<body>
+  <p>This tool assumes that you have a directory of files which have filenames like foo0001.png, foo0005.png, ... or blah1.jpg, blah3.jpg, ...</p>
+  <p>All it does is looks at the numbers from the end of each filename and re-numbers them so there's no missing numbers. So in the first example above they'd be renamed to foo1.png, foo2.png, ... and in the second example they'd be renamed blah1.jpg, blah2.jpg, ...</p>
+  <p style="font-weight:bold;">Options:</p>
+  <p>Start counting at: <input id="startCountingAtEl" type="number" value="1" style="width:70px;"> (e.g. if you change this to 0, then you'll get foo0.png, foo1.png, ...)</p>
+  <p>Pad with zeros: <input id="zeroPaddingCountEl" type="number" value="0" style="width:70px;"> (e.g. if you change this to 3, then you'll get foo001.png, foo002.png, ...)</p>
+  <p>Base name: <input id="baseNameEl" type="text" value="file" style="width:70px;"> (e.g. if you change this to "cat", then you'll get cat1.png, cat2.png, ...)</p>
+  <p style="font-weight:bold;">Please ensure you've backed up your directory before proceeding, in case there's a bug in my code or you make a mistake with the above options.</p>
+  <button onclick="start(); this.disabled=true;">choose a directory of files &amp; begin</button>
+  <p>Most browsers throttle the processing power available to "background" tabs (i.e. tabs other than the one you're currently viewing). If you want to process files fast, please <b>keep this tab visible or drag it out into its own window</b>.</p>
+  
+  <pre id="progressCtn"></pre>
+
+  <script>
+    let classToImageNames = {};
+
+    async function start() {
+
+      let dirHandle = await window.showDirectoryPicker({mode:"readwrite"});
+      
+      let fileData = [];
+
+      let numProcessed = 0;
+      for await (let entry of dirHandle.values()) {
+        if(entry.kind !== 'file') continue;
+        let fileHandle = entry;
+        let existingNumberMatches = [...fileHandle.name.matchAll(/([0-9]+)/g)];
+        if(existingNumberMatches.length === 0) {
+          document.body.innerHTML += `<b style="color:red;">There's a file that doesn't have a number: ${fileHandle.name}</b>`;
+          return;
+        }
+        let existingNumber = Number(existingNumberMatches.pop()[0]);
+        fileData.push({existingName:fileHandle.name, existingNumber});
+        numProcessed++;
+        if(numProcessed < 100 || numProcessed % 10 === 0) progressCtn.innerHTML = `Reading existing names... ${numProcessed}`;
+      }
+      
+      let startCountingAt = Number(startCountingAtEl.value);
+      let zeroPaddingCount = Number(zeroPaddingCountEl.value);
+
+      if(isNaN(zeroPaddingCount)) {
+        document.body.innerHTML += `<b style="color:red;">You specified "${zeroPaddingCount}" for zero padding which is invalid.</b>`;
+        return;
+      }
+      if(isNaN(startCountingAt)) {
+        document.body.innerHTML += `<b style="color:red;">You specified "${startCountingAt}" for the starting number.</b>`;
+        return;
+      }
+
+      if(zeroPaddingCount > 0) {
+        let maxFilesAllowed = Number("9".repeat(zeroPaddingCount))+1;
+        if(fileData.length > maxFilesAllowed+startCountingAt) {
+          document.body.innerHTML += `<b style="color:red;">You specified "${zeroPaddingCount}" for zero padding which (if counting from ${startCountingAt}) allows for up to ${maxFilesAllowed+startCountingAt} files, but there are ${fileData.length} files in this folder.</b>`;
+          return;
+        }
+      }
+
+      if(new Set(fileData.map(d => d.existingNumber)).size !== fileData.length) {
+        document.body.innerHTML += `<b style="color:red;">You have multiple files with the same number.</b>`;
+        return;
+      }
+
+      fileData.sort((a,b) => a.existingNumber-b.existingNumber);
+      fileData.forEach((d,i) => d.newNumber=i+startCountingAt);
+
+      let existingNameToData = fileData.reduce((a,v) => (a[v.existingName]=v, a), {});
+
+      let baseName = baseNameEl.value;
+      let numRenamed = 0;
+      for await (let entry of dirHandle.values()) {
+        if(entry.kind !== 'file') continue;
+        let fileHandle = entry;
+
+        let data = existingNameToData[fileHandle.name];
+
+        let extension = "";
+        if(fileHandle.name.includes(".")) {
+          extension = "."+fileHandle.name.split(".").pop();
+        }
+        
+        await renameFile(dirHandle, fileHandle, baseName+data.newNumber.toString().padStart(zeroPaddingCount, "0")+extension);
+        
+        numRenamed++;
+        if(numRenamed < 100 || numRenamed % 10 === 0) progressCtn.innerHTML = `Renaming... ${numRenamed}`;
+      }
+
+      progressCtn.innerHTML = `<b style="font-size:150%;">Finished!</b>`;
+
+    }
+
+    // this is needed because fileHandle.move() is not implemented as of writing (Dec 2022)
+    async function renameFile(dirHandle, oldFileHandle, newName) {
+      const newFileHandle = await dirHandle.getFileHandle(newName, {create:true});
+      let oldFile = await oldFileHandle.getFile();
+      await writeFile(newFileHandle, oldFile);
+      await dirHandle.removeEntry(oldFileHandle.name);
+    }
+
+    async function writeFile(fileHandle, contents) { // contents can be an ArrayBuffer, a TypedArray, a DataView, a Blob, or a string
+      // Create a FileSystemWritableFileStream to write to.
+      const writable = await fileHandle.createWritable();
+      // Write the contents of the file to the stream.
+      await writable.write(contents);
+      // Close the file and write the contents to disk.
+      await writable.close();
+    }
+
+    
+
+  </script>
+</body>
+</html>
